@@ -1,16 +1,18 @@
 services:
-# this is alternative image which is also working, its open source apache kafka that has nothing to do with confluent company
+## this is alternative image which is also working, its open source apache kafka that has nothing to do with confluent company
 #  broker:
 #    image: apache/kafka:latest
 #    container_name: broker
+#    ports:
+#      - 29092:29092
 #    environment:
 #      KAFKA_NODE_ID: 1
 #      KAFKA_PROCESS_ROLES: broker,controller
 ##      kafka listeners need to be changed from localhost to 0.0.0.0:xxxx in order to have access outside of container
-#      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://localhost:9093
-#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092
+#      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://localhost:9093,PLAINTEXT_HOST://0.0.0.0:29092
+#      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://broker:9092,PLAINTEXT_HOST://localhost:29092
 #      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+#      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
 #      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
 #      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
 #      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
@@ -44,22 +46,82 @@ services:
       CONFLUENT_SUPPORT_METRICS_ENABLE: "false"
       CLUSTER_ID: "my-cluster-id"
     healthcheck:
-      test: [ "CMD", "/usr/bin/kafka-topics", "--bootstrap-server", "localhost:9092", "--list" ]
+#      test: [ "CMD", "/usr/bin/kafka-topics", "--bootstrap-server", "localhost:9092", "--list" ]
+
+      test: [ "CMD", "/usr/bin/kafka-topics", "--bootstrap-server", "broker:9092", "--list" ]
 
       interval: 10s
       retries: 5
       start_period: 10s
       timeout: 5s
-  redpanda-console:
-    image: docker.redpanda.com/redpandadata/console:latest
-    container_name: redpanda-console
-    environment:
-      KAFKA_BROKERS: "broker:9092"
+
+#  redpanda-console:
+#    image: docker.redpanda.com/redpandadata/console:latest
+#    container_name: redpanda-console
+#    environment:
+#      KAFKA_BROKERS: "broker:9092"
+#    ports:
+#      - "8080:8080"
+#    depends_on:
+#      broker:
+#        condition: service_healthy
+#  kafdrop:
+#    image: obsidiandynamics/kafdrop
+#    restart: always
+#    ports:
+#      - "9000:9000"
+#    environment:
+#      KAFKA_BROKER_CONNECT: "broker:9092"
+#    depends_on:
+#      broker:
+#        condition: service_healthy
+
+#  schema-registry:
+#    image: confluentinc/cp-schema-registry:latest
+#    hostname: schema-registry
+#    container_name: schema-registry
+#    depends_on:
+#      broker:
+#        condition: service_healthy
+#    ports:
+#      - "8081:8081"
+#    environment:
+#      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+#      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: "PLAINTEXT://broker:9092"
+#      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
     ports:
-      - "8080:8080"
+      - "27017:27017"
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - ./mongo-init.js:/docker-entrypoint-initdb.d/mongo-init.js:ro
+
+  connect:
+    image: confluentinc/cp-kafka-connect:latest
+    container_name: connect
     depends_on:
-      broker:
-        condition: service_healthy
-
-
-
+      - broker
+      - mongodb
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: broker:9092
+      CONNECT_REST_PORT: 8083
+      CONNECT_REST_ADVERTISED_HOST_NAME: localhost
+      CONNECT_GROUP_ID: "kafka-connect-group"
+      CONNECT_CONFIG_STORAGE_TOPIC: "connect-configs"
+      CONNECT_OFFSET_STORAGE_TOPIC: "connect-offsets"
+      CONNECT_STATUS_STORAGE_TOPIC: "connect-statuses"
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "false"
+      CONNECT_PLUGIN_PATH: /usr/share/java,/etc/kafka-connect/jars
+    volumes:
+      - ./plugins:/etc/kafka-connect/jars
